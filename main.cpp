@@ -1,98 +1,157 @@
 #include "main.h"
 
-/**
- * A callback function for LLEMU's center button.
- *
- * When this callback is fired, it will toggle line 2 of the LCD text between
- * "I was pressed!" and nothing.
- */
-void on_center_button() {
-	static bool pressed = false;
-	pressed = !pressed;
-	if (pressed) {
-		pros::lcd::set_text(2, "I was pressed!");
-	} else {
-		pros::lcd::clear_line(2);
-	}
+/**Below is the #include for lemlib, an open source odometry and PID library that will be
+ used to generate autonomous programs in this project, please DO NOT delete this line of code, for any
+ references to the lemlib api and setup for most of this project please
+ refer to this link: https://lemlib.readthedocs.io/en/stable/tutorials/1_getting_started.html */
+#include "lemlib/api.hpp" // IWYU pragma: keep
+
+//Drivetrain Configuration
+pros::MotorGroup left_motors({1, 2, 3}, pros::MotorGearset::blue); 
+pros::MotorGroup right_motors({4, 5, 6}, pros::MotorGearset::blue); 
+
+pros::v5::motor leftA(1, pros::MotorGearset::blue);
+
+//Drivetrain Class (Contains all Drivtrain Settings)
+	lemlib::Drivetrain drivetrain(&left_motors, 
+							  &right_motors,
+							  10, //track width in inches
+							  lemlib::Omniwheel::NEW_325, //wheel size
+							  450, //drivetrain rpm
+							  2 //horizontal drift
+	);
+
+//IMU Configuration
+pros::Imu imu(10);
+
+//Rotation Sensor Configurations
+pros::Rotation horizontal_sensor(1); // x axis sensor 
+pros::Rotation vertical_sensor(2); // y axis sensor
+
+//Tracking Wheel Configuration
+//(sensor-name, omniwheel size, offsets, gear-ratio);
+lemlib::TrackingWheel horizontal_tracking_wheel(&horizontal_sensor, lemlib::Omniwheel::NEW_2, 0, 1);
+lemlib::TrackingWheel vertical_tracking_wheel(&vertical_sensor, lemlib::Omniwheel::NEW_2, 0, 1);
+
+//Odom Config
+lemlib::OdomSensors sensors(&vertical_tracking_wheel, // vertical tracking wheel 1, set to null
+	nullptr, // vertical tracking wheel 2, set to nullptr as we are using IMEs
+	&horizontal_tracking_wheel, // horizontal tracking wheel 1
+	nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
+	&imu // inertial sensor
+);
+
+//PID Controllers
+
+	// lateral PID controller
+	lemlib::ControllerSettings lateral_controller(10, // proportional gain (kP)
+                                              0, // integral gain (kI)
+                                              3, // derivative gain (kD)
+                                              3, // anti windup
+                                              1, // small error range, in inches
+                                              100, // small error range timeout, in milliseconds
+                                              3, // large error range, in inches
+                                              500, // large error range timeout, in milliseconds
+                                              20 // maximum acceleration (slew)
+	);
+
+	// angular PID controller
+	lemlib::ControllerSettings angular_controller(2, // proportional gain (kP)
+                                              0, // integral gain (kI)
+                                              10, // derivative gain (kD)
+                                              3, // anti windup
+                                              1, // small error range, in degrees
+                                              100, // small error range timeout, in milliseconds
+                                              3, // large error range, in degrees
+                                              500, // large error range timeout, in milliseconds
+                                              0 // maximum acceleration (slew)
+	);
+
+// create the chassis
+lemlib::Chassis chassis(drivetrain,
+	lateral_controller,
+	angular_controller,
+	sensors
+);
+
+
+/** Example Function for LLEMU button callbacks:
+
+		void on_center_button() {
+			static bool pressed = false;
+			pressed = !pressed;
+			if (pressed) {
+				pros::lcd::set_text(2, "I was pressed!");
+			} else {
+				pros::lcd::clear_line(2);
+			}
 }
 
-/**
- * Runs initialization code. This occurs as soon as the program is started.
- *
- * All other competition modes are blocked by initialize; it is recommended
- * to keep execution time for this mode under a few seconds.
- */
+Buttons for LLEMU are numbered 0-2, right-left, register the desired button inside the "initialize" function
+and assign a callback function inside the parentheses following the example shown above.
+*/
+
+//autonomous selector configuration
+int auton;
+bool autonStarted;
+
+
+// Below is the initialize function, this runs automatically when the robot is started
 void initialize() {
 	//initialize lcd display on the v5 brain
 	pros::lcd::initialize();
-	
+	chassis.calibrate(); //calibrate sensors
+	pros::Task screen_task([&](){
+		while  (true) {
+			//display coordinates to the brain screen 
+			pros::lcd::print(0, "X: %f", chassis.getPose().x);
+			pros::lcd::print(1, "Y: %f", chassis.getPose().y);
+			pros::lcd::print(2, "Theta: %f", chassis.getPose().theta);
+			
+			//display autonomous selected
+			pros::lcd::print(4, "Autonomous Selected:");
 
-	//Assign each button on the LLEMU callback functions
-	pros::lcd::register_btn0_cb();
-	pros::lcd::register_btn1_cb(on_center_button);
-	pros::lcd::register_btn2_cb();
+			//display motor temps
+			pros::lcd::print(6,leftA.get_temperature());
+
+
+
+	//Assign each button of the LLEMU callback functions
+	  //Left Button
+		pros::lcd::register_btn0_cb();
+	  //Middle Button
+		pros::lcd::register_btn1_cb();
+	  //Right Button
+		pros::lcd::register_btn2_cb();
+
+	pros::delay(15);
+	}
+  });
 }
 
-/**
- * Runs while the robot is in the disabled state of Field Management System or
- * the VEX Competition Switch, following either autonomous or opcontrol. When
- * the robot is enabled, this task will exit.
- */
+
+
 void disabled() {}
 
-/**
- * Runs after initialize(), and before autonomous when connected to the Field
- * Management System or the VEX Competition Switch. This is intended for
- * competition-specific initialization routines, such as an autonomous selector
- * on the LCD.
- *
- * This task will exit when the robot is enabled and autonomous or opcontrol
- * starts.
- */
-void competition_initialize() {}
+// runs after initialize, when connected to field control
+void competition_initialize(){}
 
-/**
- * Runs the user autonomous code. This function will be started in its own task
- * with the default priority and stack size whenever the robot is enabled via
- * the Field Management System or the VEX Competition Switch in the autonomous
- * mode. Alternatively, this function may be called in initialize or opcontrol
- * for non-competition testing purposes.
- *
- * If the robot is disabled or communications is lost, the autonomous task
- * will be stopped. Re-enabling the robot will restart the task, not re-start it
- * from where it left off.
- */
+
 void autonomous() {}
 
-/**
- * Runs the operator control code. This function will be started in its own task
- * with the default priority and stack size whenever the robot is enabled via
- * the Field Management System or the VEX Competition Switch in the operator
- * control mode.
- *
- * If no competition control is connected, this function will run immediately
- * following initialize().
- *
- * If the robot is disabled or communications is lost, the
- * operator control task will be stopped. Re-enabling the robot will restart the
- * task, not resume it from where it left off.
- */
+
+pros::Controller controller(pros::E_CONTROLLER_MASTER);
+
 void opcontrol() {
-	pros::Controller master(pros::E_CONTROLLER_MASTER);
-	pros::MotorGroup left_mg({1, -2, 3});    // Creates a motor group with forwards ports 1 & 3 and reversed port 2
-	pros::MotorGroup right_mg({-4, 5, -6});  // Creates a motor group with forwards port 5 and reversed ports 4 & 6
+	while (true){
 
+		//get joystick position
+		int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+		int leftX = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X);
 
-	while (true) {
-		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
-		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
-		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
+		//move the robot
+		chassis.arcade(leftX, leftY);
 
-		// Arcade control scheme
-		int dir = master.get_analog(ANALOG_LEFT_Y);    // Gets amount forward/backward from left joystick
-		int turn = master.get_analog(ANALOG_RIGHT_X);  // Gets the turn left/right from right joystick
-		left_mg.move(dir - turn);                      // Sets left motor voltage
-		right_mg.move(dir + turn);                     // Sets right motor voltage
-		pros::delay(20);                               // Run for 20 ms then update
+		pros::delay(20);
 	}
 }
